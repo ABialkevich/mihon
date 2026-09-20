@@ -10,6 +10,7 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import eu.kanade.tachiyomi.network.AndroidCookieJar
+import eu.kanade.tachiyomi.network.CloudflareHelper
 import eu.kanade.tachiyomi.util.system.isOutdated
 import eu.kanade.tachiyomi.util.system.toast
 import okhttp3.Cookie
@@ -71,9 +72,17 @@ class CloudflareInterceptor(
         var challengeFound = false
         var cloudflareBypassed = false
         var isWebViewOutdated = false
+        var isInteractiveChallenge = false
 
         val origRequestUrl = originalRequest.url.toString()
+        val origHttpUrl = origRequestUrl.toHttpUrl()
         val headers = parseHeaders(originalRequest.headers)
+
+        fun isCloudFlareBypassed(): Boolean {
+            return cookieManager.get(origHttpUrl)
+                .firstOrNull { it.name == "cf_clearance" }
+                .let { it != null && it != oldCookie }
+        }
 
         executor.execute {
             webview = createWebView(originalRequest)
@@ -83,7 +92,8 @@ class CloudflareInterceptor(
                     @Suppress("unused")
                     @JavascriptInterface
                     fun interactiveDetected() {
-                        // The challenge cannot be solved non-interactively, abort.
+                        // Challenge requires human input — signal for manual resolution.
+                        isInteractiveChallenge = true
                         latch.countDown()
                     }
                 },
@@ -92,12 +102,6 @@ class CloudflareInterceptor(
 
             webview.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {
-                    fun isCloudFlareBypassed(): Boolean {
-                        return cookieManager.get(origRequestUrl.toHttpUrl())
-                            .firstOrNull { it.name == "cf_clearance" }
-                            .let { it != null && it != oldCookie }
-                    }
-
                     if (isCloudFlareBypassed()) {
                         cloudflareBypassed = true
                         latch.countDown()
@@ -156,6 +160,21 @@ class CloudflareInterceptor(
             }
         }
 
+        // If the challenge is interactive, open a WebView for the user to solve manually
+        // and keep polling for the cf_clearance cookie for up to 2 minutes.
+        if (isInteractiveChallenge && !cloudflareBypassed) {
+            CloudflareHelper.emitInteractiveChallenge(origRequestUrl)
+
+            val deadline = System.currentTimeMillis() + INTERACTIVE_CHALLENGE_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(COOKIE_POLL_INTERVAL_MS)
+                if (isCloudFlareBypassed()) {
+                    cloudflareBypassed = true
+                    break
+                }
+            }
+        }
+
         // Throw exception if we failed to bypass Cloudflare
         if (!cloudflareBypassed) {
             // Prompt user to update WebView if it seems too outdated
@@ -170,5 +189,8 @@ class CloudflareInterceptor(
 
 private val SERVER_CHECK = arrayOf("cloudflare-nginx", "cloudflare")
 private val COOKIE_NAMES = listOf("cf_clearance")
+
+private const val INTERACTIVE_CHALLENGE_TIMEOUT_MS = 120_000L
+private const val COOKIE_POLL_INTERVAL_MS = 1_000L
 
 private class CloudflareBypassException : Exception()
