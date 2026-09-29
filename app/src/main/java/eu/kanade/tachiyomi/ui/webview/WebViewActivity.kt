@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.core.net.toUri
+import androidx.lifecycle.lifecycleScope
 import dev.zacsweers.metro.Inject
 import eu.kanade.presentation.webview.WebViewScreenContent
 import eu.kanade.tachiyomi.R
@@ -20,9 +21,13 @@ import eu.kanade.tachiyomi.util.system.openInBrowser
 import eu.kanade.tachiyomi.util.system.toShareIntent
 import eu.kanade.tachiyomi.util.system.toast
 import eu.kanade.tachiyomi.util.view.setComposeContent
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import logcat.LogPriority
 import mihon.app.di.appGraph
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import tachiyomi.core.common.util.system.logcat
 import tachiyomi.domain.source.service.SourceManager
 import tachiyomi.i18n.MR
@@ -62,6 +67,10 @@ class WebViewActivity : BaseActivity() {
 
         val url = intent.extras?.getString(URL_KEY) ?: return
         assistUrl = url
+
+        if (intent.extras?.getBoolean(CLOUDFLARE_MODE_KEY) == true) {
+            monitorCloudflareCookie(url)
+        }
 
         setComposeContent {
             // Null until the source it belongs to has been resolved
@@ -113,6 +122,21 @@ class WebViewActivity : BaseActivity() {
         }
     }
 
+    private fun monitorCloudflareCookie(url: String) {
+        val httpUrl = url.toHttpUrlOrNull() ?: return
+        lifecycleScope.launch {
+            while (isActive) {
+                delay(1_000)
+                val hasClearance = network.cookieJar.get(httpUrl)
+                    .any { it.name == "cf_clearance" }
+                if (hasClearance) {
+                    finish()
+                    break
+                }
+            }
+        }
+    }
+
     private fun shareWebpage(url: String) {
         try {
             startActivity(url.toUri().toShareIntent(this, type = "text/plain"))
@@ -134,13 +158,21 @@ class WebViewActivity : BaseActivity() {
         private const val URL_KEY = "url_key"
         private const val SOURCE_KEY = "source_key"
         private const val TITLE_KEY = "title_key"
+        private const val CLOUDFLARE_MODE_KEY = "cloudflare_mode"
 
-        fun newIntent(context: Context, url: String, sourceId: Long? = null, title: String? = null): Intent {
+        fun newIntent(
+            context: Context,
+            url: String,
+            sourceId: Long? = null,
+            title: String? = null,
+            cloudflareMode: Boolean = false,
+        ): Intent {
             return Intent(context, WebViewActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 putExtra(URL_KEY, url)
                 putExtra(SOURCE_KEY, sourceId)
                 putExtra(TITLE_KEY, title)
+                putExtra(CLOUDFLARE_MODE_KEY, cloudflareMode)
             }
         }
     }

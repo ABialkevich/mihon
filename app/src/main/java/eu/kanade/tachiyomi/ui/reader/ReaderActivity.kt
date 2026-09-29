@@ -256,6 +256,7 @@ class ReaderActivity : BaseActivity() {
                         url = url,
                         sourceId = source?.id,
                         title = manga?.title,
+                        cloudflareMode = true,
                     ),
                 )
             }

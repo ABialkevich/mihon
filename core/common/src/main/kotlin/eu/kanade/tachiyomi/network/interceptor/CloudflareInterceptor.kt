@@ -72,7 +72,6 @@ class CloudflareInterceptor(
         var challengeFound = false
         var cloudflareBypassed = false
         var isWebViewOutdated = false
-        var isInteractiveChallenge = false
 
         val origRequestUrl = originalRequest.url.toString()
         val origHttpUrl = origRequestUrl.toHttpUrl()
@@ -92,8 +91,8 @@ class CloudflareInterceptor(
                     @Suppress("unused")
                     @JavascriptInterface
                     fun interactiveDetected() {
-                        // Challenge requires human input — signal for manual resolution.
-                        isInteractiveChallenge = true
+                        // Challenge requires human input — stop waiting so we can escalate
+                        // to a visible WebView instead of blocking the full timeout.
                         latch.countDown()
                     }
                 },
@@ -160,9 +159,11 @@ class CloudflareInterceptor(
             }
         }
 
-        // If the challenge is interactive, open a WebView for the user to solve manually
-        // and keep polling for the cf_clearance cookie for up to 2 minutes.
-        if (isInteractiveChallenge && !cloudflareBypassed) {
+        // If the headless attempt couldn't solve the challenge, open a visible WebView for the
+        // user to solve it manually and keep polling for the cf_clearance cookie for up to 2
+        // minutes. Only escalate when a UI is actively listening (e.g. reader open), otherwise
+        // fail fast so background operations like library updates don't hang.
+        if (!cloudflareBypassed && CloudflareHelper.hasInteractiveListener) {
             CloudflareHelper.emitInteractiveChallenge(origRequestUrl)
 
             val deadline = System.currentTimeMillis() + INTERACTIVE_CHALLENGE_TIMEOUT_MS
