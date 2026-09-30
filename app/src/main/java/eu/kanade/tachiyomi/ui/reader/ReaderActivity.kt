@@ -59,6 +59,7 @@ import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.databinding.ReaderActivityBinding
+import eu.kanade.tachiyomi.network.CloudflareHelper
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.ui.base.activity.BaseActivity
 import eu.kanade.tachiyomi.ui.main.MainActivity
@@ -242,6 +243,22 @@ class ReaderActivity : BaseActivity() {
                         onSetAsCoverResult(event.result)
                     }
                 }
+            }
+            .launchIn(lifecycleScope)
+
+        CloudflareHelper.interactiveChallengeFlow
+            .onEach { url ->
+                val source = viewModel.getSource()
+                val manga = viewModel.manga
+                startActivity(
+                    WebViewActivity.newIntent(
+                        context = this,
+                        url = url,
+                        sourceId = source?.id,
+                        title = manga?.title,
+                        cloudflareMode = true,
+                    ),
+                )
             }
             .launchIn(lifecycleScope)
     }
